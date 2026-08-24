@@ -119,8 +119,8 @@ ffmpeg'ning HTTP reader'i YouTube'ning parallel-fragment optimizatsiyasini bilma
 ## 🛠 Ishlab chiqish
 
 ```bash
-git clone https://github.com/azimxxm/Flet-Youtube-Downloader-App.git
-cd Flet-Youtube-Downloader-App
+git clone https://github.com/azimxxm/media-downloader.git
+cd media-downloader
 
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
