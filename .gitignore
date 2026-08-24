@@ -72,5 +72,19 @@ flet-app.tar.gz
 
 # Project specific
 *.spec
+!packaging/*.spec
 link.txt
 .DS_Store
+
+# claude-agents: per-developer plugin profile (do not commit)
+.claude/settings.local.json
+
+# ── Media Downloader ────────────────────────────────────────────────
+.venv/
+# staged ffmpeg/ffprobe binaries (fetched at build time, not committed)
+packaging/bin/
+# generated from assets/icon.png by packaging/make_icon.py
+assets/icon.iconset/
+assets/icon.icns
+*.dmg
+PROJECT_LOG.md

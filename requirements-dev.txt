@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Packaging and tooling
+pyinstaller>=6.10       # builds the macOS .app bundle
+Pillow>=10.0.0          # generates assets/icon.png + icon.icns
+pytest>=8.0.0           # test suite

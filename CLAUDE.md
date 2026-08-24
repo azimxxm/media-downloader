@@ -1,149 +1,108 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Project Overview
 
-Media Downloader is a macOS desktop application built with Flet (Python's Flutter wrapper) and yt-dlp for downloading content from YouTube and Instagram. The app supports YouTube videos/playlists and Instagram posts/reels/stories with a dark-themed, modern UI.
+Media Downloader is a macOS desktop app for downloading YouTube and Instagram
+media (video, MP3 audio, images, subtitles) for offline use. The UI is plain
+HTML/CSS/JS rendered in a native WKWebView; all logic is Python on top of
+yt-dlp and FFmpeg.
 
-## Core Architecture
+It was previously written in Flet. That was replaced because Flet bundles a
+full Flutter engine and `flet pack` produced unreliable macOS `.app` bundles.
+Do not reintroduce Flet or any other Python GUI framework.
 
-### Application Entry Points
-- **`run.py`**: Simple launcher that calls `launcher.py`
-- **`launcher.py`**: Main entry point with dependency checking GUI and platform/mode selection menu
-  - Checks for Python, Flet, yt-dlp, and FFmpeg dependencies
-  - Shows platform selection: Instagram (featured) + YouTube (3 modes)
-  - Adds common macOS paths to PATH for GUI app environment (`/opt/homebrew/bin`, `/usr/local/bin`, etc.)
+## Architecture
 
-### Downloader Modes
-Each mode is a separate class that takes a `page` (Flet Page) and optional `on_back` callback:
+Four layers, each unaware of the one above it:
 
-**Instagram Mode:**
-1. **`instagram_downloader.py`** (`InstagramDownloader`):
-   - Analyzes Instagram posts, reels, and stories
-   - Shows media preview with thumbnail
-   - Four download options: Video, Audio Only, Photo/Image, or Thumbnail
-   - Auto-detects media type from URL
-   - Photo option: Downloads actual photo for image posts, or thumbnail for video posts
-   - Thumbnail option: Always downloads the preview thumbnail image
-   - Downloads to `~/Downloads/Instagram` by default
-   - Uses `page.run_task()` for async UI updates from threads
-
-**YouTube Modes:**
-1. **`youtube_downloader_mvp.py`** (`YouTubeDownloaderMVP`): Simple mode
-   - One-click downloads with preset best quality
-   - Video (MP4) or Audio (MP3) toggle
-   - Minimal configuration
-
-2. **`youtube_downloader_advanced.py`** (`YouTubeDownloaderAdvanced`): Advanced mode
-   - Fetches available formats via `yt-dlp`
-   - Allows resolution selection (up to 4K)
-   - Subtitle download support (multiple languages)
-   - Format preview before download
-
-3. **`youtube_playlist_downloader.py`** (`PlaylistDownloader`): Playlist mode
-   - Fetches all videos from playlist
-   - Select individual videos or download all
-   - Parallel downloads (max 2 concurrent by default via `ThreadPoolExecutor`)
-   - Uses `VideoItem` class to track each video's state
-   - Thread-safe UI updates with `ui_lock`
-
-### Shared Components
-- **`ui_components.py`**: Contains `ProgressControl` class
-  - Reusable progress bar component with stats (speed, ETA, size)
-  - States: start_download, update_progress, complete, error, cancelled, reset
-  - Includes "Show in Finder" button and cancel functionality
-
-## Technology Stack
-
-- **UI Framework**: Flet (Flutter for Python) with dark theme
-- **Download Engine**: yt-dlp (fork of youtube-dl)
-- **Media Processing**: FFmpeg (required for MP4/MP3 conversion and merging)
-- **Fonts**: Inter (loaded via Google Fonts CDN)
-- **Platform**: macOS-focused (uses Finder integration, Homebrew paths)
-
-## Development Commands
-
-### Running the Application
-```bash
-python3 run.py
 ```
-This launches the GUI setup window which handles dependency checks.
-
-### Installing Dependencies
-```bash
-# Python packages
-pip install -r requirements.txt
-
-# FFmpeg (macOS)
-brew install ffmpeg
+web/          HTML + CSS + vanilla JS. No build step, no npm, no bundler.
+   │ transport.js picks a transport at runtime by location.protocol
+   ├── file:  → server/bridge.py      pywebview js_api   (packaged app)
+   └── http:  → server/http_server.py stdlib HTTP + SSE  (browser / dev)
+                        │ server/routes.py — one API contract for both
+core/         Pure Python. Imports no UI framework at all.
 ```
 
-### Setup Script (manual dependency installation)
+### Non-negotiable constraints
+
+These exist for specific reasons; changing them reintroduces solved bugs.
+
+1. **`core/` must never import a UI framework.** It is driven by the HTTP
+   server, the native bridge, and the tests without modification.
+
+2. **The packaged app must not open a listening socket.** macOS 15+ shows a
+   *"find devices on your local network"* permission prompt for any listening
+   TCP port, even on 127.0.0.1. `Bridge` avoids this by using pywebview's
+   `js_api` channel. The window URL must stay `file://` — pywebview starts its
+   own HTTP server for relative paths.
+
+3. **HTTP mode uses the standard library only.** No FastAPI, uvicorn, or
+   websockets: they cause PyInstaller hidden-import failures, which is the
+   class of problem this rewrite exists to escape.
+
+4. **`_LoopbackHTTPServer` must keep overriding `server_bind`.** The stock
+   `http.server` calls `socket.getfqdn()` there, which does a reverse DNS
+   lookup through mDNSResponder.
+
+5. **The CSP in `index.html` needs `'unsafe-eval'`.** pywebview delivers
+   Python → JS events by evaluating a string; without it every progress update
+   is silently dropped. All media text is rendered via `textContent`, never
+   `innerHTML`, which is what actually prevents injection here.
+
+6. **`[hidden] { display: none !important; }` must stay in `styles.css`.** The
+   whole UI toggles visibility through the `hidden` attribute, and any explicit
+   `display` rule beats the user-agent default.
+
+7. **Format selectors use `vcodec^=avc1`, not `vcodec=h264`.** yt-dlp compares
+   the raw codec string (`avc1.640028`), so `=h264` never matches and silently
+   falls back to a low-resolution progressive format.
+
+8. **Download progress is aggregated across parts.** A merged download fetches
+   video then audio, each reporting its own 0–100%. `core/downloader.py` sums
+   them and clamps the result monotonically.
+
+## Commands
+
 ```bash
-python3 setup.py
+# Setup
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+
+# Run
+.venv/bin/python app.py                  # native window
+.venv/bin/python app.py --browser        # browser mode (fast UI iteration)
+.venv/bin/python app.py --hidden         # native, no visible window
+
+# Test
+.venv/bin/python -m pytest tests/ -q     # unit tests, no network
+.venv/bin/python packaging/ui_smoke.py   # UI end-to-end in a hidden window
+
+# Build
+./packaging/build_macos.sh               # .app → ad-hoc signature → .dmg
+.venv/bin/python packaging/make_icon.py  # regenerate assets/icon.{png,icns}
 ```
-This script:
-- Checks Python version (requires 3.7+)
-- Installs Python packages (flet, yt-dlp, ffmpeg-python)
-- Detects and installs FFmpeg via Homebrew (macOS)
 
-### Building for Distribution
-```bash
-./publish.sh
-```
-This script:
-1. Cleans previous builds
-2. Installs/updates dependencies with `--break-system-packages` flag
-3. Uses `flet pack` to create macOS `.app` bundle
-4. Uses `pkgbuild` to create `.pkg` installer for `/Applications`
-5. Outputs to `dist/` directory
+`packaging/ui_smoke.py` drives the real pywebview window through the shipping
+bridge: bootstrap → analyse → download → completion, plus responsive checks at
+560/780/1100px. Run it after any change to `web/` or `server/`.
 
-## Key Technical Details
+## Conventions
 
-### yt-dlp Integration
-- Uses `yt_dlp.YoutubeDL` context manager for all downloads
-- Works with both YouTube and Instagram URLs automatically
-- Common options across modes:
-  - `format`: Format selection string (e.g., `bestvideo+bestaudio/best`, `best[ext=mp4]/best`)
-  - `outtmpl`: Output path template
-  - `merge_output_format`: Target format (mp4/mp3)
-  - `postprocessors`: FFmpeg-based audio extraction for MP3
-  - `progress_hooks`: Callback for download progress updates
-- Instagram-specific: Extracts thumbnail, title, and available formats (video/audio/photo)
+- UI strings and user-facing error messages are in Uzbek. Code, identifiers,
+  comments, and commit messages are in English.
+- `core/errors.py::translate_error` is the single place raw exceptions become
+  user-facing text.
+- New API endpoints go in `server/routes.py` so both transports get them.
+- The build script's smoke test must keep passing; it is the last gate before
+  a `.dmg` is produced.
 
-### Threading Model
-- All downloads run in background threads to prevent UI blocking
-- Playlist mode uses `concurrent.futures.ThreadPoolExecutor` for parallel downloads
-- UI updates from threads must call `self.page.update()` or component's `.update()`
-- Playlist mode uses `Lock()` for thread-safe UI operations
+## Release
 
-### File Picker
-- Flet's `FilePicker` component used for folder selection
-- Must be added to `page.overlay` before use
-- Default download locations:
-  - YouTube modes: `~/Downloads`
-  - Instagram mode: `~/Downloads/Instagram` (auto-created)
+Tagging `v*` triggers `.github/workflows/release.yml`, which builds arm64 and
+x86_64 `.dmg` files and attaches them to a GitHub Release.
 
-### Path Handling
-- Uses `pathlib.Path` for cross-platform compatibility
-- Subprocess for opening Finder: `subprocess.run(["open", "-R", file_path])`
-
-### Window Configuration
-- All modes set fixed window dimensions (700-900px width, 600-800px height)
-- Dark theme: `ft.ThemeMode.DARK`, bgcolor `#1a1a1a`
-- Gradients and rounded corners used throughout UI
-
-## Common Issues
-
-### FFmpeg Not Found
-The app requires FFmpeg in PATH. If not found:
-- Launcher shows manual installation instructions
-- Videos may download but fail to merge/convert without FFmpeg
-- On macOS, install via `brew install ffmpeg`
-
-### Frozen App Detection
-`launcher.py` uses `getattr(sys, 'frozen', False)` to detect if running as packaged app vs source code.
-
-### Language Notes
-Error messages and UI text contain Uzbek language strings (e.g., "Dastur to'xtatildi", "O'rnatish muvaffaqiyatsiz tugadi"). This is intentional for the target audience.
+Builds are ad-hoc signed, not notarized, so first launch requires
+*System Settings ▸ Privacy & Security ▸ Open Anyway*. Setting `SIGN_IDENTITY`
+to a Developer ID enables a real signature.

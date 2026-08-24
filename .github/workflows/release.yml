@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v2.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14      # Apple Silicon
+            arch: arm64
+          - runner: macos-13      # Intel
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Create the virtualenv the build script expects
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+
+      - name: Build .app and .dmg
+        run: ./packaging/build_macos.sh
+
+      - name: Checksum
+        run: shasum -a 256 dist/*.dmg | tee dist/SHA256SUMS-${{ matrix.arch }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MediaDownloader-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/SHA256SUMS-*.txt
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.dmg
+            artifacts/SHA256SUMS-*.txt
+          body: |
+            ## O'rnatish
+
+            1. Mos `.dmg` ni yuklab oling — Apple Silicon (M1–M4) uchun `arm64`, Intel Mac uchun `x86_64`
+            2. Oching va ilovani **Applications** papkasiga sudrab tashlang
+            3. Ilova Apple tomonidan notarize qilinmagan, shuning uchun birinchi ochishda:
+               **System Settings ▸ Privacy & Security ▸ "Open Anyway"**
+
+               yoki terminalda:
+               ```
+               xattr -dr com.apple.quarantine "/Applications/Media Downloader.app"
+               ```
+
+            Video va audioni birlashtirish uchun FFmpeg kerak: `brew install ffmpeg`
