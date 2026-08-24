@@ -20,9 +20,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14      # Apple Silicon
+          # macos-13 was retired and macos-14 deprecated; these are the current
+          # labels. Intel builds need the explicit -intel suffix now.
+          - runner: macos-15
             arch: arm64
-          - runner: macos-13      # Intel
+          - runner: macos-15-intel
             arch: x86_64
 
     steps:
