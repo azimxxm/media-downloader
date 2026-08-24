@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- `file:` sources are required by the packaged app, whose page is loaded
+       from disk rather than served over HTTP.
+       'unsafe-eval' is required too: pywebview delivers Python -> JS events by
+       evaluating a string, so without it every progress update is dropped.
+       The script directives therefore buy little; the value here is object-src,
+       frame-src, base-uri and connect-src, which bound where data can go. All
+       media metadata is rendered with textContent, never innerHTML. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' file:;
+                 img-src 'self' file: https: data:;
+                 style-src 'self' file: 'unsafe-inline';
+                 script-src 'self' file: 'unsafe-inline' 'unsafe-eval';
+                 connect-src 'self';
+                 object-src 'none'; frame-src 'none'; base-uri 'none'">
+  <title>Media Downloader</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-token="__AUTH_TOKEN__">
+
+  <!-- The window already carries the app name in its title bar, so this row is
+       a toolbar rather than a second header: where files land, plus settings. -->
+  <header class="titlebar">
+    <button class="dest-chip" id="open-folder-btn" title="Papkani Finder'da ochish">
+      <span class="brand-dot"></span>
+      <svg class="dest-chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+      <span id="titlebar-dest">~/Downloads</span>
+    </button>
+    <div class="titlebar-actions">
+      <span class="brand-version" id="version"></span>
+      <button class="icon-btn" id="settings-btn" title="Sozlamalar" aria-label="Sozlamalar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.6l1.5 2.7 3.1-.5 1 3-2.2 2.2 2.2 2.2-1 3-3.1-.5L12 21.4l-1.5-2.7-3.1.5-1-3 2.2-2.2L6.4 11.8l1-3 3.1.5L12 2.6z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="banner banner-warn" id="ffmpeg-banner" hidden>
+    <div class="banner-body">
+      <strong>FFmpeg topilmadi</strong>
+      <span id="ffmpeg-message"></span>
+      <code>brew install ffmpeg</code>
+    </div>
+    <button class="btn btn-ghost btn-sm" id="ffmpeg-recheck">Qayta tekshirish</button>
+  </div>
+
+  <main class="page">
+
+    <!-- ─────────────── URL input ─────────────── -->
+    <section class="card url-card" id="url-card">
+      <div class="url-row">
+        <span class="url-icon" id="platform-badge" data-platform="none">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+        </span>
+        <input type="url" id="url-input" spellcheck="false" autocomplete="off"
+               placeholder="YouTube yoki Instagram havolasini joylashtiring…">
+        <button class="btn btn-ghost btn-sm" id="paste-btn" title="Vstavit (⌘V)">Paste</button>
+        <button class="btn btn-primary" id="analyze-btn">
+          <span class="btn-label">Tahlil qilish</span>
+          <span class="spinner" hidden></span>
+        </button>
+      </div>
+      <p class="hint" id="url-hint">YouTube video, Shorts, playlist · Instagram post, reel, story</p>
+    </section>
+
+    <!-- ─────────────── Media preview ─────────────── -->
+    <section class="card media-card" id="media-card" hidden>
+      <div class="media-head">
+        <div class="thumb" id="media-thumb"><div class="thumb-fallback">▶</div></div>
+        <div class="media-meta">
+          <h2 id="media-title">—</h2>
+          <p class="media-sub" id="media-sub"></p>
+          <div class="chips" id="media-chips"></div>
+        </div>
+      </div>
+
+      <div class="options">
+        <div class="option-block">
+          <label class="option-label">Format</label>
+          <div class="segmented" id="mode-group" role="radiogroup"></div>
+        </div>
+
+        <div class="option-block" id="quality-block">
+          <label class="option-label" for="quality-select">Sifat</label>
+          <select id="quality-select"></select>
+        </div>
+
+        <div class="option-block" id="subtitle-block">
+          <label class="option-label">Subtitr</label>
+          <div class="subtitle-row">
+            <label class="switch">
+              <input type="checkbox" id="subtitle-toggle">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+            <select id="subtitle-select" disabled></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="dest-row">
+        <span class="dest-label">Saqlash joyi</span>
+        <span class="dest-path" id="dest-path" title=""></span>
+        <button class="btn btn-ghost btn-sm" id="change-dir-btn">O'zgartirish</button>
+      </div>
+
+      <button class="btn btn-primary btn-lg btn-block" id="download-btn">
+        <svg viewBox="0 0 24 24" class="btn-icon" aria-hidden="true"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
+        <span>Yuklab olish</span>
+      </button>
+    </section>
+
+    <!-- ─────────────── Playlist ─────────────── -->
+    <section class="card playlist-card" id="playlist-card" hidden>
+      <div class="section-head">
+        <div>
+          <h2 id="playlist-title">Playlist</h2>
+          <p class="media-sub" id="playlist-sub"></p>
+        </div>
+        <div class="section-actions">
+          <label class="checkbox">
+            <input type="checkbox" id="select-all" checked>
+            <span>Hammasi</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="playlist-list" id="playlist-list"></div>
+
+      <div class="playlist-footer">
+        <div class="options options-inline">
+          <div class="option-block">
+            <label class="option-label">Format</label>
+            <div class="segmented" id="playlist-mode-group" role="radiogroup"></div>
+          </div>
+          <div class="option-block">
+            <label class="option-label" for="playlist-quality">Sifat</label>
+            <select id="playlist-quality">
+              <option value="best">Eng yaxshi</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+              <option value="480">480p</option>
+              <option value="360">360p</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg" id="playlist-download-btn">
+          <span id="playlist-download-label">Tanlanganlarni yuklash</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ─────────────── Downloads ─────────────── -->
+    <section class="card jobs-card" id="jobs-card" hidden>
+      <div class="section-head">
+        <h2>Yuklamalar <span class="counter" id="jobs-counter"></span></h2>
+        <div class="section-actions">
+          <button class="btn btn-ghost btn-sm" id="cancel-all-btn">Barchasini to'xtatish</button>
+          <button class="btn btn-ghost btn-sm" id="clear-jobs-btn">Tozalash</button>
+        </div>
+      </div>
+      <div class="jobs-list" id="jobs-list"></div>
+    </section>
+
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
+      </div>
+      <p>Havolani joylashtiring va tahlil qiling</p>
+    </div>
+  </main>
+
+  <!-- ─────────────── Settings dialog ─────────────── -->
+  <div class="modal-backdrop" id="settings-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <h2 id="settings-title">Sozlamalar</h2>
+        <button class="icon-btn" id="settings-close" aria-label="Yopish">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-row">
+          <div>
+            <strong>YouTube papkasi</strong>
+            <p class="setting-path" id="setting-yt-dir"></p>
+          </div>
+          <button class="btn btn-ghost btn-sm" data-choose="youtube_dir">O'zgartirish</button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <strong>Instagram papkasi</strong>
+            <p class="setting-path" id="setting-ig-dir"></p>
+          </div>
+          <button class="btn btn-ghost btn-sm" data-choose="instagram_dir">O'zgartirish</button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <strong>Parallel yuklash</strong>
+            <p class="setting-path">Bir vaqtda nechta fayl yuklansin</p>
+          </div>
+          <select id="setting-parallel">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="6">6</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div>
+            <strong>FFmpeg</strong>
+            <p class="setting-path" id="setting-ffmpeg"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+  <script src="transport.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

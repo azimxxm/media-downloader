@@ -1,4 +1,3 @@
-flet>=0.80.0
-yt-dlp>=2024.0.0
-ffmpeg-python>=0.2.0
-Pillow>=10.0.0
+# Runtime dependencies
+yt-dlp>=2025.1.1        # download engine (YouTube, Instagram, 1000+ sites)
+pywebview>=5.4          # native WKWebView window; falls back to the browser
